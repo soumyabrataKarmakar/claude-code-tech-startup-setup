@@ -1,0 +1,51 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "env": {}
+    },
+    "brave-search": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    },
+    "mcp-server-discovery": {
+      "type": "http",
+      "url": "https://mcp.1mcpserver.com/mcp/"
+    },
+    "n8n": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@leonardsellem/n8n-mcp-server"
+      ],
+      "env": {
+        "N8N_API_URL": "${N8N_API_URL}",
+        "N8N_API_KEY": "${N8N_API_KEY}"
+      }
+    },
+    "mongo-atlas": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mongodb-mcp-server@latest"
+      ],
+      "env": {
+        "MDB_MCP_API_CLIENT_ID": "${MDB_MCP_API_CLIENT_ID}",
+        "MDB_MCP_API_CLIENT_SECRET": "${MDB_MCP_API_CLIENT_SECRET}"
+      }
+    }
+  }
+}
