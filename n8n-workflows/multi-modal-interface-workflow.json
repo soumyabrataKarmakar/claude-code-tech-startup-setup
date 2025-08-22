@@ -1,0 +1,705 @@
+{
+  "name": "Multi-Modal Interface Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "interface",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "interface-webhook",
+      "name": "Interface Input",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "webhookId": "multi-modal-interface"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.input_type }}",
+              "rightValue": "voice",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "input-type-switch",
+      "name": "Input Type Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "speech-to-text",
+              "name": "processed_text",
+              "value": "={{ $json.audio_data }}",
+              "type": "string"
+            },
+            {
+              "id": "confidence-score",
+              "name": "confidence",
+              "value": "={{ $json.confidence || 0.95 }}",
+              "type": "number"
+            },
+            {
+              "id": "language-detected",
+              "name": "language",
+              "value": "={{ $json.language || 'en' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "voice-processor",
+      "name": "Voice Processing",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "text-validation",
+              "name": "processed_text",
+              "value": "={{ $json.text_input.trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "text-confidence",
+              "name": "confidence",
+              "value": 1.0,
+              "type": "number"
+            },
+            {
+              "id": "input-length",
+              "name": "text_length",
+              "value": "={{ $json.text_input.length }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "text-processor",
+      "name": "Text Processing",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "input-merger",
+      "name": "Merge Inputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "resource": "search_nodes",
+        "query": "={{ 'user_id:' + $json.user_id + ' conversation_context' }}",
+        "options": {}
+      },
+      "id": "context-retrieval",
+      "name": "Retrieve Context",
+      "type": "n8n-nodes-mcp.memory",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "conversation-state",
+              "name": "conversation_context",
+              "value": "={{ $('context-retrieval').item.json.results || [] }}",
+              "type": "object"
+            },
+            {
+              "id": "user-preferences",
+              "name": "user_preferences",
+              "value": "={{ $json.user_preferences || {} }}",
+              "type": "object"
+            },
+            {
+              "id": "accessibility-settings",
+              "name": "accessibility",
+              "value": "={{ $json.accessibility_settings || {} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "context-processor",
+      "name": "Process Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.processed_text }}",
+              "rightValue": "emergency|urgent|chest pain|difficulty breathing|severe pain|bleeding|unconscious",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "emergency-detector",
+      "name": "Emergency Detection",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/emergency-escalation",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "user_id",
+              "value": "={{ $json.user_id }}"
+            },
+            {
+              "name": "emergency_input",
+              "value": "={{ $json.processed_text }}"
+            },
+            {
+              "name": "confidence",
+              "value": "={{ $json.confidence }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "emergency-escalation",
+      "name": "Emergency Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.processed_text }}",
+              "rightValue": "symptoms|pain|medication|treatment|doctor|appointment",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "clinical-router",
+      "name": "Clinical Intent Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1600, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/clinical-decision-support",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "user_id",
+              "value": "={{ $json.user_id }}"
+            },
+            {
+              "name": "clinical_query",
+              "value": "={{ $json.processed_text }}"
+            },
+            {
+              "name": "conversation_context",
+              "value": "={{ $json.conversation_context }}"
+            },
+            {
+              "name": "user_preferences",
+              "value": "={{ $json.user_preferences }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "clinical-support",
+      "name": "Clinical Decision Support",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 500]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "response-type",
+              "name": "response_type",
+              "value": "={{ $json.user_preferences.preferred_output || 'text' }}",
+              "type": "string"
+            },
+            {
+              "id": "accessibility-format",
+              "name": "accessibility_format",
+              "value": "={{ $json.accessibility.screen_reader ? 'screen_reader' : 'standard' }}",
+              "type": "string"
+            },
+            {
+              "id": "language-code",
+              "name": "language",
+              "value": "={{ $json.language || 'en' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "response-formatter",
+      "name": "Response Formatter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.response_type }}",
+              "rightValue": "voice",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "output-router",
+      "name": "Output Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [2200, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "voice-response",
+              "name": "voice_output",
+              "value": "={{ $json.clinical_response || $json.processed_text }}",
+              "type": "string"
+            },
+            {
+              "id": "speech-rate",
+              "name": "speech_rate",
+              "value": "={{ $json.accessibility.speech_rate || 1.0 }}",
+              "type": "number"
+            },
+            {
+              "id": "voice-language",
+              "name": "voice_language",
+              "value": "={{ $json.language }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "voice-synthesizer",
+      "name": "Voice Synthesis",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2400, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "text-response",
+              "name": "text_output",
+              "value": "={{ $json.clinical_response || $json.processed_text }}",
+              "type": "string"
+            },
+            {
+              "id": "font-size",
+              "name": "font_size",
+              "value": "={{ $json.accessibility.large_text ? 'large' : 'normal' }}",
+              "type": "string"
+            },
+            {
+              "id": "contrast-mode",
+              "name": "high_contrast",
+              "value": "={{ $json.accessibility.high_contrast || false }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "text-formatter",
+      "name": "Text Formatting",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2400, 500]
+    },
+    {
+      "parameters": {
+        "resource": "add_observations",
+        "observations": [
+          {
+            "entityName": "={{ 'user_' + $json.user_id }}",
+            "contents": [
+              "={{ 'Interaction: ' + $json.processed_text + ' at ' + new Date().toISOString() }}",
+              "={{ 'Response: ' + ($json.clinical_response || 'General response') }}",
+              "={{ 'Modality: ' + $json.input_type + ' -> ' + $json.response_type }}"
+            ]
+          }
+        ],
+        "options": {}
+      },
+      "id": "context-storage",
+      "name": "Store Context",
+      "type": "n8n-nodes-mcp.memory",
+      "typeVersion": 1,
+      "position": [2600, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "final-response",
+              "name": "response",
+              "value": "={{ $json.voice_output || $json.text_output }}",
+              "type": "string"
+            },
+            {
+              "id": "response-metadata",
+              "name": "metadata",
+              "value": "={{ { 'type': $json.response_type, 'accessibility': $json.accessibility_format, 'confidence': $json.confidence, 'timestamp': new Date().toISOString() } }}",
+              "type": "object"
+            },
+            {
+              "id": "session-id",
+              "name": "session_id",
+              "value": "={{ $json.session_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "response-builder",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2800, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Interface Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3000, 400]
+    }
+  ],
+  "connections": {
+    "Interface Input": {
+      "main": [
+        [
+          {
+            "node": "Input Type Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Type Router": {
+      "main": [
+        [
+          {
+            "node": "Voice Processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Text Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice Processing": {
+      "main": [
+        [
+          {
+            "node": "Merge Inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Processing": {
+      "main": [
+        [
+          {
+            "node": "Merge Inputs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Inputs": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Context": {
+      "main": [
+        [
+          {
+            "node": "Process Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Context": {
+      "main": [
+        [
+          {
+            "node": "Emergency Detection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency Detection": {
+      "main": [
+        [
+          {
+            "node": "Emergency Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clinical Intent Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency Escalation": {
+      "main": [
+        [
+          {
+            "node": "Response Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clinical Intent Router": {
+      "main": [
+        [
+          {
+            "node": "Clinical Decision Support",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clinical Decision Support": {
+      "main": [
+        [
+          {
+            "node": "Response Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response Formatter": {
+      "main": [
+        [
+          {
+            "node": "Output Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Router": {
+      "main": [
+        [
+          {
+            "node": "Voice Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Text Formatting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice Synthesis": {
+      "main": [
+        [
+          {
+            "node": "Store Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Formatting": {
+      "main": [
+        [
+          {
+            "node": "Store Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Context": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Interface Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "multi-modal-interface-v1.0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "multi-modal-orchestration"
+  },
+  "id": "multi-modal-interface-workflow",
+  "tags": ["healthcare", "interface", "accessibility", "voice", "text"]
+}

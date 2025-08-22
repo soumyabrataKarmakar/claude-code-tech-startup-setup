@@ -1,0 +1,493 @@
+{
+  "name": "Personal Health Assistant - Clinical Decision Support",
+  "version": 1,
+  "createdAt": "2025-01-27T00:00:00.000Z",
+  "updatedAt": "2025-01-27T00:00:00.000Z",
+  "active": true,
+  "tags": ["healthcare", "clinical-decision-support", "evidence-based", "mcp-integration"],
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinical-decision-support",
+        "authentication": "headerAuth",
+        "options": {
+          "rawBody": true,
+          "cors": {
+            "enabled": true,
+            "allowedOrigins": "https://health-assistant.dextechlabs.com"
+          }
+        }
+      },
+      "id": "webhook-clinical-decision",
+      "name": "Clinical Decision Support Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clinicalRequest = $json.body;\n\n// Clinical data validation\nconst validation = {\n  isValid: true,\n  errors: [],\n  warnings: [],\n  sanitizedData: {},\n  clinicalFlags: []\n};\n\n// Required fields validation\nconst requiredFields = ['requestId', 'patientId', 'requestType'];\nfor (const field of requiredFields) {\n  if (!clinicalRequest[field]) {\n    validation.isValid = false;\n    validation.errors.push(`Missing required field: ${field}`);\n  }\n}\n\n// Validate severity score\nif (clinicalRequest.clinicalData?.severity) {\n  const severity = parseInt(clinicalRequest.clinicalData.severity);\n  if (severity < 1 || severity > 10) {\n    validation.errors.push('Severity must be between 1 and 10');\n  } else if (severity >= 8) {\n    validation.clinicalFlags.push('High severity score requires urgent attention');\n  }\n}\n\n// Validate age for age-specific protocols\nif (clinicalRequest.demographics?.age) {\n  const age = parseInt(clinicalRequest.demographics.age);\n  if (age < 0 || age > 150) {\n    validation.errors.push('Invalid age provided');\n  } else {\n    if (age < 18) validation.clinicalFlags.push('Pediatric patient - age-specific protocols apply');\n    if (age > 65) validation.clinicalFlags.push('Geriatric patient - medication adjustments may be needed');\n  }\n}\n\n// Validate vital signs for abnormal values\nif (clinicalRequest.vitals) {\n  const vitals = clinicalRequest.vitals;\n  if (vitals.temperature > 101.3) validation.clinicalFlags.push('Fever present');\n  if (vitals.heartRate > 100) validation.clinicalFlags.push('Tachycardia present');\n  if (vitals.heartRate < 60) validation.clinicalFlags.push('Bradycardia present');\n  if (vitals.oxygenSaturation < 95) validation.clinicalFlags.push('Low oxygen saturation');\n}\n\n// Check for drug allergies and interactions potential\nif (clinicalRequest.medicalHistory?.allergies?.length > 0) {\n  validation.clinicalFlags.push('Patient has known allergies - check compatibility');\n}\n\nif (clinicalRequest.medicalHistory?.medications?.length > 5) {\n  validation.clinicalFlags.push('Polypharmacy - check for drug interactions');\n}\n\n// Sanitize text inputs\nconst textFields = ['symptoms', 'associatedFindings', 'conditions'];\ntextFields.forEach(field => {\n  if (clinicalRequest.clinicalData?.[field]) {\n    validation.sanitizedData[field] = clinicalRequest.clinicalData[field]\n      .map(item => item.trim().substring(0, 500).replace(/[<>]/g, ''));\n  }\n});\n\nreturn {\n  validation,\n  clinicalRequest: validation.isValid ? { ...clinicalRequest, ...validation.sanitizedData } : null,\n  timestamp: new Date().toISOString(),\n  processingFlags: validation.clinicalFlags\n};"
+      },
+      "id": "input-processing",
+      "name": "Input Processing & Clinical Validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validation-check",
+              "leftValue": "={{ $json.validation.isValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "validation-check",
+      "name": "Clinical Data Validation Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "server": "sequential-thinking",
+        "tool": "sequentialthinking",
+        "toolInput": {
+          "thought": "Beginning clinical analysis for {{ $json.clinicalRequest.requestType }}. Patient presents with: {{ $json.clinicalRequest.clinicalData.symptoms.join(', ') }}. Age: {{ $json.clinicalRequest.demographics?.age || 'unknown' }}, Severity: {{ $json.clinicalRequest.clinicalData?.severity || 'not specified' }}. Medical history includes: {{ $json.clinicalRequest.medicalHistory?.conditions?.join(', ') || 'none reported' }}. Need to consider differential diagnosis, evidence-based guidelines, and patient-specific factors.",
+          "thoughtNumber": 1,
+          "totalThoughts": 8,
+          "nextThoughtNeeded": true
+        }
+      },
+      "id": "initial-clinical-reasoning",
+      "name": "Sequential Thinking - Initial Clinical Reasoning",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [900, 180]
+    },
+    {
+      "parameters": {
+        "server": "memory",
+        "tool": "search_nodes",
+        "toolInput": {
+          "query": "{{ $json.clinicalRequest.patientId }} medical history conditions medications"
+        }
+      },
+      "id": "patient-history-retrieval",
+      "name": "Memory MCP - Patient History Integration",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "server": "biomcp",
+        "tool": "search",
+        "toolInput": {
+          "query": "disease: {{ $json.clinicalRequest.clinicalData.symptoms[0] }} AND symptoms: {{ $json.clinicalRequest.clinicalData.symptoms.join(' OR ') }}",
+          "domain": "article",
+          "page_size": 15,
+          "call_benefit": "Searching for evidence-based information on patient symptoms for clinical decision support"
+        }
+      },
+      "id": "biomcp-literature-search",
+      "name": "BioMCP - Medical Literature Search",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [900, 420]
+    },
+    {
+      "parameters": {
+        "server": "pubmed-mcp-server",
+        "tool": "search_pubmed_key_words",
+        "toolInput": {
+          "key_words": "{{ $json.clinicalRequest.clinicalData.symptoms.join(' AND ') }} diagnosis treatment",
+          "num_results": 10
+        }
+      },
+      "id": "pubmed-research-evidence",
+      "name": "PubMed MCP - Research Evidence",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [1120, 180]
+    },
+    {
+      "parameters": {
+        "server": "brave-search",
+        "tool": "brave_web_search",
+        "toolInput": {
+          "query": "{{ $json.clinicalRequest.clinicalData.symptoms[0] }} clinical practice guidelines 2024 2025 evidence-based treatment",
+          "count": 8
+        }
+      },
+      "id": "clinical-guidelines-search",
+      "name": "Brave Search - Current Clinical Guidelines",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "medications-present",
+              "leftValue": "={{ $json.clinicalRequest.medicalHistory?.medications?.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "medication-check",
+      "name": "Check for Medications",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 420]
+    },
+    {
+      "parameters": {
+        "server": "biomcp",
+        "tool": "search",
+        "toolInput": {
+          "query": "drug: {{ $json.clinicalRequest.medicalHistory?.medications?.join(' OR drug: ') || 'none' }}",
+          "domain": "drug",
+          "page_size": 10,
+          "call_benefit": "Analyzing patient medications for safety, interactions, and therapeutic considerations"
+        }
+      },
+      "id": "drug-analysis",
+      "name": "BioMCP - Drug Information Analysis",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [1340, 380]
+    },
+    {
+      "parameters": {
+        "server": "sequential-thinking",
+        "tool": "sequentialthinking",
+        "toolInput": {
+          "thought": "Synthesizing evidence from medical literature, research papers, and clinical guidelines. Key findings from BioMCP: {{ $json.bioMCPResults?.results?.length || 0 }} relevant articles found. PubMed research: {{ $json.pubMedResults?.length || 0 }} papers reviewed. Clinical guidelines: {{ $json.braveSearchResults?.results?.length || 0 }} current guidelines identified. Need to integrate this evidence with patient-specific factors to generate appropriate recommendations.",
+          "thoughtNumber": 4,
+          "totalThoughts": 8,
+          "nextThoughtNeeded": true
+        }
+      },
+      "id": "evidence-synthesis",
+      "name": "Sequential Thinking - Evidence Synthesis",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clinicalData = $json.clinicalRequest;\nconst bioMCPResults = $json.bioMCPResults || {};\nconst pubMedResults = $json.pubMedResults || [];\nconst guidelinesResults = $json.braveSearchResults || {};\nconst drugInfo = $json.drugAnalysis || {};\nconst patientHistory = $json.patientHistory || {};\n\n// Initialize recommendation structure\nconst recommendations = {\n  differentialDiagnosis: [],\n  recommendedActions: [],\n  diagnosticTests: [],\n  treatmentOptions: [],\n  medicationConsiderations: [],\n  followUpCare: [],\n  redFlags: [],\n  patientEducation: [],\n  evidenceSources: [],\n  confidenceLevel: 'moderate'\n};\n\n// Process symptoms for differential diagnosis\nconst primarySymptoms = clinicalData.clinicalData.symptoms;\nlet diagnosisConfidence = 0;\n\n// Analyze BioMCP results for diagnostic information\nif (bioMCPResults.results && bioMCPResults.results.length > 0) {\n  bioMCPResults.results.slice(0, 5).forEach(result => {\n    recommendations.differentialDiagnosis.push({\n      condition: result.title,\n      likelihood: 'possible',\n      evidenceSource: result.url\n    });\n    recommendations.evidenceSources.push({\n      type: 'medical_database',\n      title: result.title,\n      url: result.url\n    });\n  });\n  diagnosisConfidence += 20;\n}\n\n// Process PubMed research evidence\nif (pubMedResults.length > 0) {\n  pubMedResults.slice(0, 3).forEach(study => {\n    recommendations.evidenceSources.push({\n      type: 'peer_reviewed_research',\n      title: study.title,\n      pmid: study.pmid,\n      relevance: 'high'\n    });\n  });\n  diagnosisConfidence += 30;\n}\n\n// Process clinical guidelines\nif (guidelinesResults.results && guidelinesResults.results.length > 0) {\n  guidelinesResults.results.slice(0, 3).forEach(guideline => {\n    recommendations.treatmentOptions.push({\n      approach: 'Evidence-based guideline recommendation',\n      source: guideline.title,\n      url: guideline.url\n    });\n    recommendations.evidenceSources.push({\n      type: 'clinical_guideline',\n      title: guideline.title,\n      url: guideline.url\n    });\n  });\n  diagnosisConfidence += 25;\n}\n\n// Generate recommended actions based on severity and findings\nconst severity = clinicalData.clinicalData.severity || 0;\nif (severity >= 8) {\n  recommendations.recommendedActions.push('Urgent medical evaluation recommended within 24 hours');\n  recommendations.redFlags.push('High severity score requires prompt medical attention');\n} else if (severity >= 6) {\n  recommendations.recommendedActions.push('Medical consultation recommended within 2-3 days');\n} else {\n  recommendations.recommendedActions.push('Routine medical follow-up as appropriate');\n}\n\n// Age-specific considerations\nconst age = clinicalData.demographics?.age;\nif (age && age > 65) {\n  recommendations.medicationConsiderations.push('Geriatric dosing adjustments may be required');\n  recommendations.diagnosticTests.push('Consider age-related organ function assessment');\n} else if (age && age < 18) {\n  recommendations.medicationConsiderations.push('Pediatric dosing and formulations required');\n  recommendations.treatmentOptions.push('Age-appropriate treatment protocols');\n}\n\n// Medication analysis if drugs present\nif (clinicalData.medicalHistory?.medications?.length > 0) {\n  recommendations.medicationConsiderations.push('Review current medications for interactions');\n  recommendations.medicationConsiderations.push('Assess medication adherence and effectiveness');\n  \n  if (drugInfo.results && drugInfo.results.length > 0) {\n    drugInfo.results.forEach(drug => {\n      recommendations.medicationConsiderations.push(`Consider ${drug.title} interactions and contraindications`);\n    });\n  }\n}\n\n// Allergy considerations\nif (clinicalData.medicalHistory?.allergies?.length > 0) {\n  recommendations.redFlags.push('Patient has known allergies - verify medication and treatment compatibility');\n  recommendations.medicationConsiderations.push('Avoid medications with known allergen cross-reactivity');\n}\n\n// Generate follow-up recommendations\nrecommendations.followUpCare = [\n  'Monitor symptom progression and response to treatment',\n  'Schedule appropriate follow-up based on condition severity',\n  'Return for evaluation if symptoms worsen or new symptoms develop'\n];\n\n// Patient education recommendations\nrecommendations.patientEducation = [\n  'Understand warning signs that require immediate medical attention',\n  'Learn about condition management and self-care measures',\n  'Maintain medication compliance and understand potential side effects'\n];\n\n// Set confidence level based on available evidence\nif (diagnosisConfidence >= 70) {\n  recommendations.confidenceLevel = 'high';\n} else if (diagnosisConfidence >= 40) {\n  recommendations.confidenceLevel = 'moderate';\n} else {\n  recommendations.confidenceLevel = 'low';\n  recommendations.redFlags.push('Limited evidence available - professional medical consultation strongly recommended');\n}\n\nreturn {\n  ...clinicalData,\n  clinicalRecommendations: recommendations,\n  evidenceQuality: {\n    totalSources: recommendations.evidenceSources.length,\n    confidenceScore: diagnosisConfidence,\n    recommendationStrength: recommendations.confidenceLevel\n  },\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "clinical-recommendation-engine",
+      "name": "Clinical Recommendation Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clinicalData = $json;\nconst recommendations = clinicalData.clinicalRecommendations;\n\nconst safetyReview = {\n  safetyFlags: [],\n  validationChecks: [],\n  approvalStatus: 'pending',\n  requiredDisclaimer: true\n};\n\n// Safety flag checks\nconst severity = clinicalData.clinicalRequest.clinicalData.severity || 0;\nconst age = clinicalData.clinicalRequest.demographics?.age;\n\n// High severity safety checks\nif (severity >= 8) {\n  safetyReview.safetyFlags.push('High severity symptoms require urgent medical evaluation');\n  safetyReview.validationChecks.push('Emergency escalation protocol reviewed');\n}\n\n// Age-specific safety considerations\nif (age < 18) {\n  safetyReview.safetyFlags.push('Pediatric patient - specialized protocols apply');\n  safetyReview.validationChecks.push('Age-appropriate recommendations verified');\n} else if (age > 75) {\n  safetyReview.safetyFlags.push('Elderly patient - increased medication sensitivity');\n  safetyReview.validationChecks.push('Geriatric considerations included');\n}\n\n// Medication safety checks\nif (clinicalData.clinicalRequest.medicalHistory?.medications?.length > 5) {\n  safetyReview.safetyFlags.push('Polypharmacy - drug interaction risk');\n  safetyReview.validationChecks.push('Medication interaction analysis completed');\n}\n\n// Allergy safety checks\nif (clinicalData.clinicalRequest.medicalHistory?.allergies?.length > 0) {\n  safetyReview.safetyFlags.push('Known allergies - treatment compatibility required');\n  safetyReview.validationChecks.push('Allergy considerations documented');\n}\n\n// Evidence quality validation\nif (recommendations.evidenceSources.length < 3) {\n  safetyReview.safetyFlags.push('Limited evidence - professional consultation strongly recommended');\n}\n\n// Final approval based on safety review\nif (safetyReview.safetyFlags.length === 0) {\n  safetyReview.approvalStatus = 'approved';\n} else if (severity < 8 && safetyReview.safetyFlags.length <= 2) {\n  safetyReview.approvalStatus = 'approved_with_caution';\n} else {\n  safetyReview.approvalStatus = 'requires_professional_review';\n}\n\nreturn {\n  ...clinicalData,\n  safetyReview,\n  finalValidation: {\n    timestamp: new Date().toISOString(),\n    reviewComplete: true,\n    safetyStatus: safetyReview.approvalStatus\n  }\n};"
+      },
+      "id": "safety-review",
+      "name": "Safety Review & Clinical Validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clinicalAnalysis = $json;\nconst recommendations = clinicalAnalysis.clinicalRecommendations;\nconst safetyReview = clinicalAnalysis.safetyReview;\n\nconst response = {\n  success: true,\n  requestId: clinicalAnalysis.clinicalRequest.requestId,\n  patientId: clinicalAnalysis.clinicalRequest.patientId,\n  sessionId: clinicalAnalysis.clinicalRequest.sessionId,\n  analysisComplete: true,\n  \n  clinicalSummary: {\n    primarySymptoms: clinicalAnalysis.clinicalRequest.clinicalData.symptoms,\n    severity: clinicalAnalysis.clinicalRequest.clinicalData.severity,\n    urgencyLevel: safetyReview.approvalStatus,\n    confidenceLevel: recommendations.confidenceLevel\n  },\n  \n  differentialDiagnosis: recommendations.differentialDiagnosis,\n  \n  recommendedActions: {\n    immediate: recommendations.recommendedActions.filter(action => \n      action.includes('urgent') || action.includes('immediate')),\n    shortTerm: recommendations.recommendedActions.filter(action => \n      action.includes('within') || action.includes('24 hours')),\n    longTerm: recommendations.followUpCare\n  },\n  \n  diagnosticRecommendations: recommendations.diagnosticTests,\n  \n  treatmentOptions: recommendations.treatmentOptions,\n  \n  medicationGuidance: {\n    considerations: recommendations.medicationConsiderations,\n    safetyAlerts: safetyReview.safetyFlags.filter(flag => \n      flag.includes('medication') || flag.includes('drug'))\n  },\n  \n  patientEducation: recommendations.patientEducation,\n  \n  redFlags: recommendations.redFlags,\n  \n  evidenceSupport: {\n    totalSources: recommendations.evidenceSources.length,\n    qualityRating: recommendations.confidenceLevel,\n    keyReferences: recommendations.evidenceSources.slice(0, 5)\n  },\n  \n  safetyInformation: {\n    flags: safetyReview.safetyFlags,\n    approvalStatus: safetyReview.approvalStatus,\n    requiresProfessionalReview: safetyReview.approvalStatus === 'requires_professional_review'\n  },\n  \n  disclaimers: [\n    \"This clinical decision support is for informational purposes only\",\n    \"Does not replace professional medical judgment or patient evaluation\",\n    \"Healthcare providers should use clinical judgment in applying recommendations\",\n    \"Patients should consult healthcare providers for medical decisions\",\n    \"Emergency conditions require immediate professional medical care\"\n  ],\n  \n  metadata: {\n    analysisDate: new Date().toISOString(),\n    evidenceLastUpdated: new Date().toISOString(),\n    systemVersion: \"clinical-decision-support-v1.0.0\",\n    processingTime: \"calculated_in_seconds\"\n  }\n};\n\nreturn response;"
+      },
+      "id": "structured-response-generation",
+      "name": "Structured Response Generation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "server": "memory",
+        "tool": "create_entities",
+        "toolInput": {
+          "entities": [
+            {
+              "name": "{{ $json.patientId }}_clinical_decision_{{ $json.requestId }}",
+              "entityType": "clinical_decision_support",
+              "observations": [
+                "Request type: {{ $json.clinicalRequest.requestType }}",
+                "Primary symptoms: {{ $json.clinicalRequest.clinicalData.symptoms.join(', ') }}",
+                "Confidence level: {{ $json.clinicalRecommendations.confidenceLevel }}",
+                "Safety status: {{ $json.safetyReview.approvalStatus }}",
+                "Evidence sources: {{ $json.clinicalRecommendations.evidenceSources.length }}",
+                "Decision date: {{ $json.metadata.analysisDate }}"
+              ]
+            }
+          ]
+        }
+      },
+      "id": "decision-storage",
+      "name": "Memory MCP - Decision Storage",
+      "type": "n8n-nodes-langchain.toolMcp",
+      "typeVersion": 1,
+      "position": [2440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}"
+      },
+      "id": "final-clinical-response",
+      "name": "Final Clinical Response",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [2660, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": false,\n  \"error\": \"Clinical data validation failed\",\n  \"details\": {{ JSON.stringify($json.validation.errors) }},\n  \"clinicalFlags\": {{ JSON.stringify($json.processingFlags) }},\n  \"timestamp\": \"{{ $json.timestamp }}\"\n}",
+        "responseCode": 400
+      },
+      "id": "validation-error-response",
+      "name": "Clinical Validation Error Response",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [680, 480]
+    }
+  ],
+  "connections": {
+    "Clinical Decision Support Webhook": {
+      "main": [
+        [
+          {
+            "node": "Input Processing & Clinical Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Processing & Clinical Validation": {
+      "main": [
+        [
+          {
+            "node": "Clinical Data Validation Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clinical Data Validation Check": {
+      "main": [
+        [
+          {
+            "node": "Sequential Thinking - Initial Clinical Reasoning",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Memory MCP - Patient History Integration",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "BioMCP - Medical Literature Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clinical Validation Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sequential Thinking - Initial Clinical Reasoning": {
+      "main": [
+        [
+          {
+            "node": "PubMed MCP - Research Evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory MCP - Patient History Integration": {
+      "main": [
+        [
+          {
+            "node": "Brave Search - Current Clinical Guidelines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BioMCP - Medical Literature Search": {
+      "main": [
+        [
+          {
+            "node": "Check for Medications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Medications": {
+      "main": [
+        [
+          {
+            "node": "BioMCP - Drug Information Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sequential Thinking - Evidence Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BioMCP - Drug Information Analysis": {
+      "main": [
+        [
+          {
+            "node": "Sequential Thinking - Evidence Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PubMed MCP - Research Evidence": {
+      "main": [
+        [
+          {
+            "node": "Sequential Thinking - Evidence Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brave Search - Current Clinical Guidelines": {
+      "main": [
+        [
+          {
+            "node": "Sequential Thinking - Evidence Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sequential Thinking - Evidence Synthesis": {
+      "main": [
+        [
+          {
+            "node": "Clinical Recommendation Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clinical Recommendation Engine": {
+      "main": [
+        [
+          {
+            "node": "Safety Review & Clinical Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety Review & Clinical Validation": {
+      "main": [
+        [
+          {
+            "node": "Structured Response Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Response Generation": {
+      "main": [
+        [
+          {
+            "node": "Memory MCP - Decision Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory MCP - Decision Storage": {
+      "main": [
+        [
+          {
+            "node": "Final Clinical Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handling-workflow"
+  },
+  "staticData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "healthcare-assistant-production"
+  },
+  "pinData": {},
+  "versionId": "clinical-decision-support-v1.0.0"
+}

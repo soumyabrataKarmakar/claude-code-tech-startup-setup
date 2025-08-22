@@ -1,0 +1,323 @@
+{
+  "name": "Dual Oversight Integration Workflow",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-node",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Determine oversight requirements based on request type and severity\nconst requestData = items[0].json;\nconst requestType = requestData.type;\nconst severity = requestData.severity || 0;\nconst userPreferences = requestData.user_preferences || {};\n\n// Professional oversight triggers (mandatory per compliance report)\nconst requiresProfessionalOversight = \n  severity >= 7 ||\n  requestType === 'emergency' ||\n  requestType === 'clinical_decision' ||\n  requestType === 'medication_recommendation' ||\n  requestType === 'treatment_advice';\n\n// User-designated oversight applicable areas\nconst allowsUserOversight = \n  requestType === 'wellness_check' ||\n  requestType === 'appointment_scheduling' ||\n  requestType === 'medication_reminder' ||\n  requestType === 'health_education' ||\n  requestType === 'administrative';\n\n// Check if user has designated oversight partners\nconst hasDesignatedPartners = userPreferences.oversight_partners && \n  userPreferences.oversight_partners.length > 0;\n\n// Determine routing\nlet routingDecision = {\n  requires_professional: requiresProfessionalOversight,\n  allows_user_oversight: allowsUserOversight && hasDesignatedPartners,\n  oversight_type: requiresProfessionalOversight ? 'professional' : \n    (allowsUserOversight && hasDesignatedPartners ? 'user_designated' : 'none'),\n  emergency_escalation: requestType === 'emergency'\n};\n\nreturn { json: { ...requestData, oversight_routing: routingDecision } };"
+      },
+      "id": "oversight-routing",
+      "name": "Oversight Routing Logic",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.oversight_routing.requires_professional}}",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "professional-oversight-check",
+      "name": "Professional Oversight Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "resource": "mcp__memory__search_nodes",
+        "operation": "search",
+        "searchQuery": "={{$json.user_id}}_professional_oversight_queue"
+      },
+      "id": "professional-queue-check",
+      "name": "Check Professional Queue",
+      "type": "n8n-nodes-base.mcp",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "resource": "mcp__memory__create_entities",
+        "entities": [\n          {\n            "name": "={{$json.user_id}}_oversight_request_{{$json.timestamp}}",\n            "entityType": "professional_oversight_request",\n            "observations": [\n              "Request Type: {{$json.type}}",\n              "Severity: {{$json.severity}}",\n              "User ID: {{$json.user_id}}",\n              "Timestamp: {{$json.timestamp}}",\n              "Clinical Context: {{$json.clinical_context}}",\n              "Status: pending_professional_review",\n              "Priority: {{$json.oversight_routing.emergency_escalation ? 'emergency' : 'routine'}}",\n              "Review Required By: {{$json.oversight_routing.emergency_escalation ? 'immediate' : '2_hours'}}"\n            ]\n          }\n        ]
+      },
+      "id": "queue-professional-review",
+      "name": "Queue Professional Review",
+      "type": "n8n-nodes-base.mcp",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.oversight_routing.allows_user_oversight}}",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "user-oversight-check",
+      "name": "User Oversight Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 500]
+    },
+    {
+      "parameters": {
+        "resource": "mcp__memory__search_nodes",
+        "operation": "search",
+        "searchQuery": "={{$json.user_id}}_oversight_partners"
+      },
+      "id": "get-oversight-partners",
+      "name": "Get User Oversight Partners",
+      "type": "n8n-nodes-base.mcp",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Validate permissions for user oversight request\nconst requestData = items[0].json;\nconst partners = requestData.oversight_partners || [];\nconst requestType = requestData.type;\n\n// Permission validation matrix\nconst permissionMatrix = {\n  'wellness_check': ['wellness_monitoring'],\n  'appointment_scheduling': ['administrative'],\n  'medication_reminder': ['wellness_monitoring'],\n  'health_education': ['information_access'],\n  'administrative': ['administrative'],\n  'emergency_contact': ['emergency_contact']\n};\n\nconst requiredPermissions = permissionMatrix[requestType] || [];\n\n// Find partners with appropriate permissions\nconst authorizedPartners = partners.filter(partner => {\n  return requiredPermissions.every(permission => \n    partner.permissions && partner.permissions.includes(permission)\n  );\n});\n\n// Validate boundaries - ensure no medical decisions\nconst medicalDecisionTypes = [\n  'clinical_decision', 'treatment_advice', 'medication_recommendation',\n  'diagnosis_interpretation', 'emergency_medical'\n];\n\nconst isMedicalDecision = medicalDecisionTypes.includes(requestType);\n\nif (isMedicalDecision) {\n  return { json: {\n    ...requestData,\n    permission_validation: {\n      authorized: false,\n      reason: 'Medical decisions require professional oversight only',\n      escalation_required: true\n    }\n  }};\n}\n\nreturn { json: {\n  ...requestData,\n  permission_validation: {\n    authorized: authorizedPartners.length > 0,\n    authorized_partners: authorizedPartners,\n    required_permissions: requiredPermissions,\n    boundary_compliant: !isMedicalDecision\n  }\n}};"
+      },
+      "id": "validate-user-permissions",
+      "name": "Validate User Oversight Permissions",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.permission_validation.authorized}}",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "permission-authorized-check",
+      "name": "Permissions Authorized?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "resource": "mcp__memory__create_entities",
+        "entities": [\n          {\n            "name": "={{$json.user_id}}_user_oversight_{{$json.timestamp}}",\n            "entityType": "user_oversight_activity",\n            "observations": [\n              "Request Type: {{$json.type}}",\n              "User ID: {{$json.user_id}}",\n              "Authorized Partners: {{JSON.stringify($json.permission_validation.authorized_partners)}}",\n              "Permissions Used: {{JSON.stringify($json.permission_validation.required_permissions)}}",\n              "Timestamp: {{$json.timestamp}}",\n              "Status: authorized_user_oversight",\n              "Boundary Compliance: {{$json.permission_validation.boundary_compliant}}",\n              "Activity Type: non_medical_support"\n            ]\n          }\n        ]
+      },
+      "id": "log-user-oversight",
+      "name": "Log User Oversight Activity",
+      "type": "n8n-nodes-base.mcp",
+      "typeVersion": 1,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Create notification for authorized oversight partners\nconst requestData = items[0].json;\nconst authorizedPartners = requestData.permission_validation.authorized_partners;\nconst notifications = [];\n\nauthorizedPartners.forEach(partner => {\n  notifications.push({\n    recipient: partner.contact_info,\n    type: 'oversight_request',\n    priority: requestData.type === 'emergency_contact' ? 'high' : 'normal',\n    message: `Oversight request from ${requestData.user_name}: ${requestData.type}`,\n    context: {\n      user_id: requestData.user_id,\n      request_type: requestData.type,\n      timestamp: requestData.timestamp,\n      permissions_used: requestData.permission_validation.required_permissions\n    },\n    response_required: requestData.type === 'emergency_contact',\n    timeout: requestData.type === 'emergency_contact' ? 300 : 3600 // 5 min for emergency, 1 hour for routine\n  });\n});\n\nreturn { json: { notifications: notifications, original_request: requestData } };"
+      },
+      "id": "notify-oversight-partners",
+      "name": "Notify Oversight Partners",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 500]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Handle escalation to professional oversight\nconst requestData = items[0].json;\n\n// Escalation reasons\nconst escalationReason = \n  requestData.oversight_routing.requires_professional ? 'mandatory_professional_oversight' :\n  requestData.permission_validation && !requestData.permission_validation.authorized ? 'unauthorized_user_oversight' :\n  requestData.permission_validation && requestData.permission_validation.escalation_required ? 'medical_decision_detected' :\n  'default_professional_escalation';\n\n// Create professional oversight request\nconst professionalRequest = {\n  user_id: requestData.user_id,\n  original_request: requestData,\n  escalation_reason: escalationReason,\n  priority: requestData.oversight_routing.emergency_escalation ? 'emergency' : 'routine',\n  timestamp: new Date().toISOString(),\n  review_required_by: requestData.oversight_routing.emergency_escalation ? 'immediate' : '2_hours',\n  professional_requirements: {\n    license_verification: 'required',\n    clinical_review: 'mandatory',\n    approval_needed: true\n  }\n};\n\nreturn { json: professionalRequest };"
+      },
+      "id": "escalate-to-professional",
+      "name": "Escalate to Professional Oversight",\n      "type": "n8n-nodes-base.function",\n      "typeVersion": 1,\n      "position": [1120, 700]
+    },
+    {
+      "parameters": {
+        "resource": "mcp__memory__create_entities",
+        "entities": [\n          {\n            "name": "={{$json.user_id}}_escalation_{{$json.timestamp}}",\n            "entityType": "professional_escalation",\n            "observations": [\n              "User ID: {{$json.user_id}}",\n              "Escalation Reason: {{$json.escalation_reason}}",\n              "Priority: {{$json.priority}}",\n              "Review Required By: {{$json.review_required_by}}",\n              "Timestamp: {{$json.timestamp}}",\n              "License Verification: {{$json.professional_requirements.license_verification}}",\n              "Clinical Review: {{$json.professional_requirements.clinical_review}}",\n              "Status: pending_professional_assignment"\n            ]\n          }\n        ]
+      },\n      "id": "log-professional-escalation",\n      "name": "Log Professional Escalation",\n      "type": "n8n-nodes-base.mcp",\n      "typeVersion": 1,\n      "position": [1340, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate response based on oversight routing\nconst requestData = items[0].json;\n\nlet response = {\n  user_id: requestData.user_id,\n  request_processed: true,\n  timestamp: new Date().toISOString(),\n  oversight_applied: {\n    type: requestData.oversight_routing ? requestData.oversight_routing.oversight_type : 'professional',\n    compliance_status: 'compliant',\n    safety_protocols_active: true\n  }\n};\n\n// Add oversight-specific response details\nif (requestData.oversight_routing && requestData.oversight_routing.requires_professional) {\n  response.professional_oversight = {\n    status: 'queued_for_review',\n    estimated_response: requestData.oversight_routing.emergency_escalation ? '< 1 minute' : '< 2 hours',\n    compliance_note: 'Clinical decision requires licensed professional review per safety protocols'\n  };\n}\n\nif (requestData.permission_validation && requestData.permission_validation.authorized) {\n  response.user_oversight = {\n    status: 'authorized_partners_notified',\n    partners_contacted: requestData.permission_validation.authorized_partners.length,\n    permissions_verified: true,\n    boundary_compliance: 'non_medical_support_only'\n  };\n}\n\nreturn { json: response };"
+      },
+      "id": "generate-response",
+      "name": "Generate Oversight Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1560, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Oversight Routing Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Oversight Routing Logic": {
+      "main": [
+        [
+          {
+            "node": "Professional Oversight Required?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "User Oversight Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Professional Oversight Required?": {
+      "main": [
+        [
+          {
+            "node": "Check Professional Queue",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Queue Professional Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "User Oversight Available?": {
+      "main": [
+        [
+          {
+            "node": "Get User Oversight Partners",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalate to Professional Oversight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User Oversight Partners": {
+      "main": [
+        [
+          {
+            "node": "Validate User Oversight Permissions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate User Oversight Permissions": {
+      "main": [
+        [
+          {
+            "node": "Permissions Authorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Permissions Authorized?": {
+      "main": [
+        [
+          {
+            "node": "Log User Oversight Activity",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Oversight Partners",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalate to Professional Oversight",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalate to Professional Oversight": {
+      "main": [
+        [
+          {
+            "node": "Log Professional Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log User Oversight Activity": {
+      "main": [
+        [
+          {
+            "node": "Generate Oversight Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Oversight Partners": {
+      "main": [
+        [
+          {
+            "node": "Generate Oversight Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Professional Escalation": {
+      "main": [
+        [
+          {
+            "node": "Generate Oversight Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": {},
+  "tags": ["healthcare", "compliance", "oversight", "safety"],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-22T00:00:00.000Z",
+  "versionId": "1"
+}
